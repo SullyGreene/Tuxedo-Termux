@@ -4,7 +4,7 @@ Your command-line gateway to a curated marketplace of powerful tools for **roote
 
 ## 📖 Overview
 
-Tuxedo-Termux is a lightweight, command-line package manager designed to simplify the discovery and installation of scripts and applications that require root access. It operates independently of the official Termux repositories, sourcing its package information from the community-driven [Tuxedo-Repo](https://www.google.com/search?q=https://github.com/SullyGreene/Tuxedo-Repo).
+Tuxedo-Termux is a lightweight, command-line package manager designed to simplify the discovery and installation of scripts and applications that require root access. It operates independently of the official Termux repositories, sourcing its package information from the community-driven [Tuxedo-Repo](https://github.com/SullyGreene/Tuxedo-Repo).
 
 This tool is for power users, developers, and security enthusiasts who want to unlock the full potential of their rooted devices directly from the Termux terminal.
 
@@ -78,7 +78,7 @@ The power of Tuxedo comes from its community\!
 
 To add a new application to the marketplace, please **submit a pull request** to the `Tuxedo-Repo` repository, not this one. Contributions should follow the JSON schema and contribution guidelines outlined there.
 
-➡️ **[Contribute a Package to Tuxedo-Repo](https://www.google.com/search?q=https://github.com/SullyGreene/Tuxedo-Repo)**
+➡️ **[Contribute a Package to Tuxedo-Repo](https://github.com/SullyGreene/Tuxedo-Repo)**
 
 ## ❗ Disclaimer
 
