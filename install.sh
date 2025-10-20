@@ -35,7 +35,30 @@ log_error() {
     exit 1
 }
 
-# 1. Install Dependencies
+# 1. Check Environment (NEW FUNCTION)
+check_environment() {
+    log_info "Checking environment prerequisites..."
+
+    # Check 1: Installer must NOT be run as root.
+    if [ "$(id -u)" -eq 0 ]; then
+        log_error "This installer must NOT be run as root (or with 'su')."
+        log_error "Please run it as the normal Termux user (e.g., 'u0_a123')."
+        log_error "The 'tux' command will call 'su' itself when it needs root privileges."
+        exit 1
+    fi
+    log_info "Installer running as non-root user. [OK]"
+
+    # Check 2: 'su' binary (the root prerequisite) must be available.
+    if ! command -v su &> /dev/null; then
+        log_warn "The 'su' binary was not found in your PATH."
+        log_warn "Tuxedo-Termux requires a rooted device with 'su' accessible to Termux."
+        log_warn "Installation will continue, but 'tux install' will fail until 'su' is available."
+    else
+        log_info "'su' binary found in PATH. [OK]"
+    fi
+}
+
+# 2. Install Dependencies
 install_deps() {
     log_info "Updating package lists..."
     pkg update -y > /dev/null 2>&1
@@ -47,7 +70,7 @@ install_deps() {
     log_info "Dependencies installed."
 }
 
-# 2. Create the main 'tux' executable
+# 3. Create the main 'tux' executable
 create_main_script() {
     log_info "Creating the 'tux' command at $TUX_SCRIPT_PATH..."
     
@@ -55,7 +78,7 @@ create_main_script() {
     mkdir -p "$TUX_DIR"
 
     # Here we will write the main 'tux' script.
-    # For now, it will be a skeleton. We'll build this out next.
+    # This skeleton is unchanged from our previous step.
     cat > "$TUX_SCRIPT_PATH" << 'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 
@@ -97,7 +120,7 @@ show_help() {
     echo "  update          Sync the local package list with the remote repository"
     echo "  search <keyword>  Search for a package"
     echo "  list            List all available packages"
-    echo "  install <pkg>   Install a package"
+    echo "  install <pkg>   Install a package (requires root)"
     echo "  help            Show this help message"
     echo ""
     echo "Aliases: tuxedo, tux-market"
@@ -164,7 +187,7 @@ EOF
     log_info "'tux' command is now available."
 }
 
-# 3. Add Aliases
+# 4. Add Aliases
 add_aliases() {
     log_info "Adding aliases (tuxedo, tux-market) to $BASHRC_FILE..."
     if ! grep -q "# Tuxedo-Termux Aliases" "$BASHRC_FILE"; then
@@ -178,6 +201,8 @@ add_aliases() {
 # --- Main Execution ---
 main() {
     log_info "Starting Tuxedo-Termux installation..."
+    # This is the new execution order
+    check_environment
     install_deps
     create_main_script
     add_aliases
