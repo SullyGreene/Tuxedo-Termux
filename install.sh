@@ -7,11 +7,8 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 # --- Variables ---
-# Main installation directory for Tuxedo files (e.g., the repo clone)
 TUX_DIR="$HOME/.tuxedo"
-# Path to the main executable script
 TUX_SCRIPT_PATH="$PREFIX/bin/tux"
-# Alias definitions
 BASHRC_FILE="$HOME/.bashrc"
 ALIASES="
 # Tuxedo-Termux Aliases
@@ -21,7 +18,6 @@ alias tux-market='tux'
 
 # --- Functions ---
 
-# Function to print a formatted message
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
 }
@@ -35,24 +31,21 @@ log_error() {
     exit 1
 }
 
-# 1. Check Environment (NEW FUNCTION)
+# 1. Check Environment
 check_environment() {
     log_info "Checking environment prerequisites..."
 
-    # Check 1: Installer must NOT be run as root.
     if [ "$(id -u)" -eq 0 ]; then
         log_error "This installer must NOT be run as root (or with 'su')."
-        log_error "Please run it as the normal Termux user (e.g., 'u0_a123')."
-        log_error "The 'tux' command will call 'su' itself when it needs root privileges."
+        log_error "Please run it as the normal Termux user."
         exit 1
     fi
     log_info "Installer running as non-root user. [OK]"
 
-    # Check 2: 'su' binary (the root prerequisite) must be available.
     if ! command -v su &> /dev/null; then
         log_warn "The 'su' binary was not found in your PATH."
         log_warn "Tuxedo-Termux requires a rooted device with 'su' accessible to Termux."
-        log_warn "Installation will continue, but 'tux install' will fail until 'su' is available."
+        log_warn "Installation will continue, but 'tux install' will fail."
     else
         log_info "'su' binary found in PATH. [OK]"
     fi
@@ -74,11 +67,9 @@ install_deps() {
 create_main_script() {
     log_info "Creating the 'tux' command at $TUX_SCRIPT_PATH..."
     
-    # Create the main directory
     mkdir -p "$TUX_DIR"
 
-    # Here we will write the main 'tux' script.
-    # This skeleton is unchanged from our previous step.
+    # --- THIS IS THE UPGRADED 'tux' SCRIPT ---
     cat > "$TUX_SCRIPT_PATH" << 'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 
@@ -118,7 +109,7 @@ show_help() {
     echo ""
     echo "Commands:"
     echo "  update          Sync the local package list with the remote repository"
-    echo "  search <keyword>  Search for a package"
+    echo "  search <keyword>  Search for a package by name or description"
     echo "  list            List all available packages"
     echo "  install <pkg>   Install a package (requires root)"
     echo "  help            Show this help message"
@@ -126,41 +117,94 @@ show_help() {
     echo "Aliases: tuxedo, tux-market"
 }
 
+# [NEW] Check if the package database exists
+check_db_exists() {
+    if [ ! -f "$PACKAGE_DB" ]; then
+        log_error "Package database not found at $PACKAGE_DB"
+        log_info "Please run ${CYAN}tux update${NC} first to download the package list."
+        exit 1
+    fi
+}
+
 # --- Main Logic ---
 
-# Ensure at least one argument is given
 if [ $# -eq 0 ]; then
     show_help
     exit 1
 fi
 
-# Get the command
 COMMAND=$1
-shift # Remove the command from the arguments list
+shift
 
 # --- Command Handler ---
 case "$COMMAND" in
     update)
-        log_info "Updating package repository..."
-        if [ -d "$REPO_DIR" ]; then
+        log_info "Updating package repository from $REPO_URL..."
+        if [ -d "$REPO_DIR/.git" ]; then
             (cd "$REPO_DIR" && git pull origin main)
         else
+            log_info "Cloning new repository..."
+            rm -rf "$REPO_DIR" # Remove potentially broken/old dir
             git clone "$REPO_URL" "$REPO_DIR"
         fi
         
-        if [ $? -eq 0 ]; then
+        if [ $? -eq 0 ] && [ -f "$PACKAGE_DB" ]; then
             log_info "Package list updated successfully."
         else
-            log_error "Failed to update package list."
+            log_error "Failed to update package list or $PACKAGE_DB not found."
         fi
         ;;
 
     search)
-        log_warn "Search command is not yet implemented."
+        # [NEW] Search functionality
+        if [ -z "$1" ]; then
+            log_error "Please provide a search keyword."
+            echo "Usage: tux search <keyword>"
+            exit 1
+        fi
+        local KEYWORD="$1"
+        check_db_exists
+
+        log_info "Searching for packages matching '${CYAN}$KEYWORD${NC}'..."
+        
+        # Use jq to filter. -r for raw output. --arg passes $KEYWORD safely.
+        # test($keyword; "i") performs a case-insensitive regex search.
+        # We output as 'name<TAB>description' using @tsv
+        local RESULTS
+        RESULTS=$(jq -r --arg keyword "$KEYWORD" \
+            '.[] | select(.name | test($keyword; "i") or .description | test($keyword; "i")) | [.name, .description] | @tsv' \
+            "$PACKAGE_DB")
+        
+        if [ -z "$RESULTS" ]; then
+            log_info "No packages found."
+        else
+            echo # Add a newline for spacing
+            # Read line by line, splitting on the TAB
+            while IFS=$'\t' read -r name desc; do
+                echo -e "  ${YELLOW}$name${NC}"
+                echo -e "    $desc\n"
+            done <<< "$RESULTS"
+        fi
         ;;
 
     list)
-        log_warn "List command is not yet implemented."
+        # [NEW] List functionality
+        check_db_exists
+        log_info "Listing all available packages..."
+        
+        # Use jq to format each package as 'name<TAB>description'
+        local RESULTS
+        RESULTS=$(jq -r '.[] | [.name, .description] | @tsv' "$PACKAGE_DB")
+
+        if [ -z "$RESULTS" ]; then
+            log_error "Package database is empty or corrupt."
+        else
+            echo # Add a newline for spacing
+            while IFS=$'\t' read -r name desc; do
+                echo -e "  ${YELLOW}$name${NC}"
+                echo -e "    $desc\n"
+            done <<< "$RESULTS"
+        fi
         ;;
 
     install)
@@ -178,8 +222,8 @@ case "$COMMAND" in
         ;;
 esac
 EOF
+    # --- END OF 'tux' SCRIPT ---
 
-    # Make the script executable
     chmod +x "$TUX_SCRIPT_PATH"
     if [ $? -ne 0 ]; then
         log_error "Failed to make 'tux' script executable. Check permissions."
@@ -201,7 +245,6 @@ add_aliases() {
 # --- Main Execution ---
 main() {
     log_info "Starting Tuxedo-Termux installation..."
-    # This is the new execution order
     check_environment
     install_deps
     create_main_script
