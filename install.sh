@@ -56,9 +56,10 @@ install_deps() {
     log_info "Updating package lists..."
     pkg update -y > /dev/null 2>&1
     log_info "Installing dependencies (git, jq, curl)..."
-    pkg install -y git jq curl > /dev/null 2>&1
+    # sha256sum is in 'coreutils'
+    pkg install -y git jq curl coreutils > /dev/null 2>&1
     if [ $? -ne 0 ]; then
-        log_error "Failed to install dependencies. Please run 'pkg install git jq curl' manually and try again."
+        log_error "Failed to install dependencies. Please run 'pkg install git jq curl coreutils' manually and try again."
     fi
     log_info "Dependencies installed."
 }
@@ -69,7 +70,7 @@ create_main_script() {
     
     mkdir -p "$TUX_DIR"
 
-    # --- THIS IS THE UPGRADED 'tux' SCRIPT ---
+    # --- THIS IS THE FINAL 'tux' SCRIPT ---
     cat > "$TUX_SCRIPT_PATH" << 'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 
@@ -80,6 +81,8 @@ TUX_DIR="$HOME/.tuxedo"
 REPO_DIR="$TUX_DIR/repo"
 REPO_URL="https://github.com/SullyGreene/Tuxedo-Repo.git"
 PACKAGE_DB="$REPO_DIR/packages.json"
+# Temporary file for downloading installers
+TMP_SCRIPT="/data/data/com.termux/files/usr/tmp/tux_installer.sh"
 
 # Color Codes
 GREEN='\033[0;32m'
@@ -117,12 +120,83 @@ show_help() {
     echo "Aliases: tuxedo, tux-market"
 }
 
-# [NEW] Check if the package database exists
+# Check if the package database exists
 check_db_exists() {
     if [ ! -f "$PACKAGE_DB" ]; then
         log_error "Package database not found at $PACKAGE_DB"
         log_info "Please run ${CYAN}tux update${NC} first to download the package list."
         exit 1
+    fi
+}
+
+# Check for 'su' binary before trying to use it
+check_root_prereq() {
+    if ! command -v su &> /dev/null; then
+        log_error "Root access ('su') is required for this command, but 'su' was not found."
+        log_error "Please ensure your device is rooted and Termux has 'su' access."
+        exit 1
+    fi
+}
+
+# Verify the SHA256 checksum of a downloaded file
+verify_checksum() {
+    local FILE_PATH="$1"
+    local EXPECTED_SUM="$2"
+    
+    if [ -z "$EXPECTED_SUM" ] || [ "$EXPECTED_SUM" == "null" ]; then
+        log_warn "Package does not have a checksum. Proceeding with caution..."
+        return
+    fi
+    
+    log_info "Verifying installer integrity..."
+    local ACTUAL_SUM
+    ACTUAL_SUM=$(sha256sum "$FILE_PATH" | awk '{print $1}')
+    
+    if [ "$ACTUAL_SUM" != "$EXPECTED_SUM" ]; then
+        log_error "CHECKSUM MISMATCH! ABORTING."
+        log_error "Expected: $EXPECTED_SUM"
+        log_error "Got:      $ACTUAL_SUM"
+        log_warn "The downloaded file is corrupt or has been tampered with. Deleting."
+        rm -f "$FILE_PATH"
+        exit 1
+    fi
+    log_info "Checksum verified. [OK]"
+}
+
+# Install Termux dependencies for a package
+install_pkg_deps() {
+    local PKG_JSON="$1"
+    # Get all dependencies, filter out 'null' or empty strings
+    local DEPS
+    DEPS=$(echo "$PKG_JSON" | jq -r '.dependencies[]? | select(length > 0)')
+    
+    if [ -z "$DEPS" ]; then
+        log_info "Package has no Termux dependencies."
+        return
+    fi
+    
+    log_info "Checking Termux dependencies..."
+    local ALL_INSTALLED=true
+    local DEPS_TO_INSTALL=""
+    
+    for DEP in $DEPS; do
+        # Check if package is installed and listed
+        if ! pkg list-installed | grep -q "^$DEP/"; then
+            log_warn "Dependency '${CYAN}$DEP${NC}' not found."
+            DEPS_TO_INSTALL="$DEPS_TO_INSTALL $DEP"
+            ALL_INSTALLED=false
+        fi
+    done
+    
+    if [ "$ALL_INSTALLED" = true ]; then
+        log_info "All Termux dependencies are satisfied. [OK]"
+    else
+        log_info "Installing missing dependencies: $DEPS_TO_INSTALL"
+        pkg install -y $DEPS_TO_INSTALL
+        if [ $? -ne 0 ]; then
+            log_error "Failed to install dependencies. Aborting."
+            exit 1
+        fi
     fi
 }
 
@@ -144,7 +218,7 @@ case "$COMMAND" in
             (cd "$REPO_DIR" && git pull origin main)
         else
             log_info "Cloning new repository..."
-            rm -rf "$REPO_DIR" # Remove potentially broken/old dir
+            rm -rf "$REPO_DIR"
             git clone "$REPO_URL" "$REPO_DIR"
         fi
         
@@ -156,7 +230,6 @@ case "$COMMAND" in
         ;;
 
     search)
-        # [NEW] Search functionality
         if [ -z "$1" ]; then
             log_error "Please provide a search keyword."
             echo "Usage: tux search <keyword>"
@@ -167,19 +240,15 @@ case "$COMMAND" in
 
         log_info "Searching for packages matching '${CYAN}$KEYWORD${NC}'..."
         
-        # Use jq to filter. -r for raw output. --arg passes $KEYWORD safely.
-        # test($keyword; "i") performs a case-insensitive regex search.
-        # We output as 'name<TAB>description' using @tsv
         local RESULTS
         RESULTS=$(jq -r --arg keyword "$KEYWORD" \
-            '.[] | select(.name | test($keyword; "i") or .description | test($keyword; "i")) | [.name, .description] | @tsv' \
+            '.[] | select(.name | test($keyword; "i") or .description | test($keyword; "i") or (.aliases[]? | test($keyword; "i"))) | [.name, .description] | @tsv' \
             "$PACKAGE_DB")
         
         if [ -z "$RESULTS" ]; then
             log_info "No packages found."
         else
-            echo # Add a newline for spacing
-            # Read line by line, splitting on the TAB
+            echo
             while IFS=$'\t' read -r name desc; do
                 echo -e "  ${YELLOW}$name${NC}"
                 echo -e "    $desc\n"
@@ -188,18 +257,16 @@ case "$COMMAND" in
         ;;
 
     list)
-        # [NEW] List functionality
         check_db_exists
         log_info "Listing all available packages..."
         
-        # Use jq to format each package as 'name<TAB>description'
         local RESULTS
         RESULTS=$(jq -r '.[] | [.name, .description] | @tsv' "$PACKAGE_DB")
 
         if [ -z "$RESULTS" ]; then
             log_error "Package database is empty or corrupt."
         else
-            echo # Add a newline for spacing
+            echo
             while IFS=$'\t' read -r name desc; do
                 echo -e "  ${YELLOW}$name${NC}"
                 echo -e "    $desc\n"
@@ -208,7 +275,71 @@ case "$COMMAND" in
         ;;
 
     install)
-        log_warn "Install command is not yet implemented."
+        # [FINAL] Install functionality
+        local PKG_NAME="$1"
+        if [ -z "$PKG_NAME" ]; then
+            log_error "Please provide a package name to install."
+            echo "Usage: tux install <package-name>"
+            exit 1
+        fi
+        
+        check_db_exists
+        check_root_prereq
+        
+        log_info "Searching for package '${CYAN}$PKG_NAME${NC}'..."
+        
+        # Find the package by name or alias
+        local PKG_JSON
+        PKG_JSON=$(jq -c --arg name "$PKG_NAME" \
+            '.[] | select(.name == $name or (.aliases[]? == $name))' \
+            "$PACKAGE_DB")
+            
+        if [ -z "$PKG_JSON" ]; then
+            log_error "Package '${CYAN}$PKG_NAME${NC}' not found in the repository."
+            exit 1
+        fi
+        
+        local REAL_NAME=$(echo "$PKG_JSON" | jq -r '.name')
+        local INSTALL_URL=$(echo "$PKG_JSON" | jq -r '.install_script_url')
+        local EXPECTED_SUM=$(echo "$PKG_JSON" | jq -r '.sha256_checksum')
+        
+        log_info "Found package: ${YELLOW}$REAL_NAME${NC}"
+        
+        # 1. Install Dependencies
+        install_pkg_deps "$PKG_JSON"
+        
+        # 2. Download Installer
+        log_info "Downloading installer from: $INSTALL_URL"
+        rm -f "$TMP_SCRIPT" # Clean up any old script
+        curl -sL "$INSTALL_URL" -o "$TMP_SCRIPT"
+        
+        if [ $? -ne 0 ] || [ ! -s "$TMP_SCRIPT" ]; then
+            log_error "Failed to download installer script. Aborting."
+            rm -f "$TMP_SCRIPT"
+            exit 1
+        fi
+        
+        # 3. Verify Checksum
+        verify_checksum "$TMP_SCRIPT" "$EXPECTED_SUM"
+        
+        # 4. Execute with Root
+        log_info "Checksum OK. Granting root access to installer..."
+        log_warn "Watch your superuser prompt to grant permission."
+        chmod +x "$TMP_SCRIPT"
+        
+        # Execute script with 'su'
+        su -c "$TMP_SCRIPT"
+        local INSTALL_STATUS=$?
+        
+        # 5. Cleanup
+        log_info "Cleaning up temporary files..."
+        rm -f "$TMP_SCRIPT"
+        
+        if [ $INSTALL_STATUS -eq 0 ]; then
+            log_info "${GREEN}Installation of $REAL_NAME completed successfully.${NC}"
+        else
+            log_error "The installer for $REAL_NAME finished with an error (code: $INSTALL_STATUS)."
+        fi
         ;;
 
     help|--help|-h)
