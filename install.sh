@@ -54,11 +54,13 @@ check_environment() {
 # 2. Install Dependencies
 install_deps() {
     log_info "Updating package lists..."
-    pkg update -y > /dev/null 2>&1
+    if ! pkg update -y; then
+        log_warn "Failed to update package lists. This may cause issues if dependencies are not cached."
+    fi
+
     log_info "Installing dependencies (git, jq, curl)..."
     # sha256sum is in 'coreutils'
-    pkg install -y git jq curl coreutils > /dev/null 2>&1
-    if [ $? -ne 0 ]; then
+    if ! pkg install -y git jq curl coreutils; then
         log_error "Failed to install dependencies. Please run 'pkg install git jq curl coreutils' manually and try again."
     fi
     log_info "Dependencies installed."
@@ -79,6 +81,7 @@ create_main_script() {
 # Configuration
 TUX_DIR="$HOME/.tuxedo"
 REPO_DIR="$TUX_DIR/repo"
+TUX_TERMUX_REPO_URL="https://raw.githubusercontent.com/SullyGreene/Tuxedo-Termux/main/install.sh"
 REPO_URL="https://github.com/SullyGreene/Tuxedo-Repo.git"
 PACKAGE_DB="$REPO_DIR/packages.json"
 # Temporary file for downloading installers
@@ -115,6 +118,7 @@ show_help() {
     echo "  search <keyword>  Search for a package by name or description"
     echo "  list            List all available packages"
     echo "  install <pkg>   Install a package (requires root)"
+    echo "  self-update     Update the Tuxedo-Termux client to the latest version"
     echo "  help            Show this help message"
     echo ""
     echo "Aliases: tuxedo, tux-market"
@@ -192,8 +196,7 @@ install_pkg_deps() {
         log_info "All Termux dependencies are satisfied. [OK]"
     else
         log_info "Installing missing dependencies: $DEPS_TO_INSTALL"
-        pkg install -y $DEPS_TO_INSTALL
-        if [ $? -ne 0 ]; then
+        if ! pkg install -y $DEPS_TO_INSTALL; then
             log_error "Failed to install dependencies. Aborting."
             exit 1
         fi
@@ -340,6 +343,39 @@ case "$COMMAND" in
         else
             log_error "The installer for $REAL_NAME finished with an error (code: $INSTALL_STATUS)."
         fi
+        ;;
+
+    self-update)
+        log_info "Checking for updates to Tuxedo-Termux client..."
+        local TMP_SELF_UPDATE_SCRIPT="$TUX_DIR/tux_self_update_installer.sh" # Use TUX_DIR for temp files
+
+        log_info "Downloading latest installer from $TUX_TERMUX_REPO_URL..."
+        # Use -f to fail silently on 404/etc. and check exit code
+        if ! curl -sL -f "$TUX_TERMUX_REPO_URL" -o "$TMP_SELF_UPDATE_SCRIPT"; then
+            log_error "Failed to download the latest Tuxedo-Termux installer. Check network connectivity."
+            rm -f "$TMP_SELF_UPDATE_SCRIPT"
+            exit 1
+        fi
+
+        if [ ! -s "$TMP_SELF_UPDATE_SCRIPT" ]; then
+            log_error "Downloaded installer is empty or corrupt. Aborting self-update."
+            rm -f "$TMP_SELF_UPDATE_SCRIPT"
+            exit 1
+        fi
+
+        log_info "Executing the latest installer to update 'tux'..."
+        # The install.sh script is designed to be idempotent and will update the tux script
+        # It will also re-add aliases if they are missing, etc.
+        # Run it with bash, not sh, as it uses bash features.
+        if ! bash "$TMP_SELF_UPDATE_SCRIPT"; then
+            log_error "Self-update failed during installer execution."
+            rm -f "$TMP_SELF_UPDATE_SCRIPT"
+            exit 1
+        fi
+
+        log_info "Tuxedo-Termux client updated successfully!"
+        log_warn "You may need to restart Termux or run 'source ~/.bashrc' if aliases were updated."
+        rm -f "$TMP_SELF_UPDATE_SCRIPT"
         ;;
 
     help|--help|-h)

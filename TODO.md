@@ -5,8 +5,8 @@ This document outlines potential improvements, new features, and bug fixes for t
 ## High Priority
 
 - [ ] **Implement `tux remove <package-name>` command:** Allow users to uninstall packages previously installed via `tux`. This would require a mechanism to track installed packages and their uninstallation scripts.
-- [ ] **Improve `pkg` command error handling:** Currently, `pkg update` and `pkg install` output is redirected to `/dev/null`. Enhance error detection and reporting for these commands.
-- [ ] **Add `tux self-update` command:** Provide a way for users to update the `tux` client script itself to the latest version without re-running `install.sh`.
+- [x] **Improve `pkg` command error handling:** Currently, `pkg update` and `pkg install` output is redirected to `/dev/null`. Enhance error detection and reporting for these commands.
+- [x] **Add `tux self-update` command:** Provide a way for users to update the `tux` client script itself to the latest version without re-running `install.sh`.
 - [ ] **More robust network error handling:** Improve how `git clone`, `git pull`, and `curl` handle network connectivity issues or timeouts.
 
 ## Medium Priority
